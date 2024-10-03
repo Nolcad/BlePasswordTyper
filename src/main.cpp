@@ -318,8 +318,8 @@ void loop() {
   switch (batteryState) {
   case BatteryState::empty:
   case BatteryState::discharging:
-  case BatteryState::charging:
     break;
+  case BatteryState::charging:
   case BatteryState::full:
   case BatteryState::standby:
     lastPowerOffTimeoutReset = now;
