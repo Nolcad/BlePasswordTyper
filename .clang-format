@@ -1,0 +1,9 @@
+﻿---
+BasedOnStyle: LLVM
+AlignConsecutiveMacros: 'true'
+AlignTrailingComments: 'true'
+ColumnLimit: '100'
+CompactNamespaces: 'false'
+FixNamespaceComments: 'false'
+
+...
