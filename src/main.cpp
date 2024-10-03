@@ -7,7 +7,7 @@
 
 #include "AXP192.h"
 
-const char* PasswordSequence = ".\\XXX\tYYY\n";
+const char* PasswordSequence = ".\\USER\tPASSWORD\n";
 
 Preferences preferences;
 
@@ -25,7 +25,7 @@ unsigned long lastScreenUpdate;
 enum class BatteryState : uint8_t { empty, discharging, charging, full, standby };
 BatteryState batteryState;
 
-#define POWER_OFF_TIMEOUT (10 * 1000L)
+#define POWER_OFF_TIMEOUT (30 * 1000L)
 unsigned long lastPowerOffTimeoutReset;
 
 #define POWER_UPDATE_PERIOD 1000
@@ -36,7 +36,7 @@ BatteryGaugeState batteryGaugeState = BatteryGaugeState::idle;
 
 uint8_t batteryCapacity = 0;
 uint8_t batterySoc = 0;
-#define FULL_CHARGE_TIME_BEFORE_GAUGE_RESET (10 * 1000)
+#define FULL_CHARGE_TIME_BEFORE_GAUGE_RESET (30 * 1000)
 unsigned long batteryFullChargeTime;
 
 #define LED_SLOW_BLINK_PERIOD 1000
@@ -125,18 +125,17 @@ void loop() {
 
     if (!isPowered && isCharging) {
       batteryState = BatteryState::charging;
-      ledLightMode = LedLightMode::on;
+      ledLightMode = LedLightMode::slowBlink;
     }
 
     if (isPowered && isCharging) {
       batteryState = BatteryState::charging;
-      ledLightMode = LedLightMode::on;
+      ledLightMode = LedLightMode::slowBlink;
     }
 
     BatteryState oldBatteryState = batteryState;
     if (isPowered && !isCharging) {
       batteryState = BatteryState::standby;
-      ledLightMode = LedLightMode::slowBlink;
       if (oldBatteryState == BatteryState::standby &&
           batteryFullChargeTime < FULL_CHARGE_TIME_BEFORE_GAUGE_RESET) {
         batteryFullChargeTime += POWER_UPDATE_PERIOD;
@@ -182,13 +181,11 @@ void loop() {
     }
 
     bleKeyboard.setBatteryLevel(batterySoc);
-    /*
-        log_i(
-            "Bat Status: 0x%02X, PowerStatus: 0x%02X, WarningLevel: %d, "
-            "BatVoltage: %0.3f",
-            M5.Axp.GetBatteryChargingStatus(), M5.Axp.GetInputPowerStatus(),
-            M5.Axp.GetWarningLevel(), M5.Axp.GetBatVoltage());
-    */
+
+    log_i("Bat Status: 0x%02X, PowerStatus: 0x%02X, WarningLevel: %d, "
+          "BatVoltage: %0.3f",
+          M5.Axp.GetBatteryChargingStatus(), M5.Axp.GetInputPowerStatus(), M5.Axp.GetWarningLevel(),
+          M5.Axp.GetBatVoltage());
   }
 
   if (now - lastScreenUpdate >= SCREEN_UPDATE_PERIOD) {
@@ -285,9 +282,10 @@ void loop() {
             M5.Axp.GetBatteryChargingStatus(), M5.Axp.GetInputPowerStatus(),
             M5.Axp.GetWarningLevel(), M5.Axp.GetBatVoltage());
     */
+
     unsigned long timeoutElapsed = (now - lastPowerOffTimeoutReset) * 154 / POWER_OFF_TIMEOUT;
     canvas.drawRect(2, 73, 156, 6, TFT_DARKGRAY);
-    canvas.drawRect(4, 75, timeoutElapsed, 2, TFT_DARKGRAY);
+    canvas.drawRect(4, 75, 154 - timeoutElapsed, 2, TFT_DARKGRAY);
     canvas.pushSprite(&display, 0, 0);
   }
 
@@ -315,5 +313,16 @@ void loop() {
     lastPowerOffTimeoutReset = now;
     bleKeyboard.pressKey(KEY_MEDIA_MUTE);
     bleKeyboard.releaseKey(KEY_MEDIA_MUTE);
+  }
+
+  switch (batteryState) {
+  case BatteryState::empty:
+  case BatteryState::discharging:
+  case BatteryState::charging:
+    break;
+  case BatteryState::full:
+  case BatteryState::standby:
+    lastPowerOffTimeoutReset = now;
+    break;
   }
 }
