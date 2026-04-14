@@ -103,6 +103,22 @@ typedef struct {
   uint8_t keycode[6];
 } KeyReport;
 
+class BleKeyboardLedStateBuffer {
+public:
+  static constexpr size_t SIZE = 100;
+
+private:
+  volatile size_t head = 0;
+  volatile size_t tail = 0;
+  volatile size_t count = 0;
+  uint8_t buffer[SIZE];
+
+public:
+  bool empty() const;
+  bool push(uint8_t value);
+  bool pop(uint8_t &value);
+};
+
 class BleKeyboard : public Print,
                     public NimBLEServerCallbacks,
                     public NimBLECharacteristicCallbacks {
@@ -121,11 +137,11 @@ private:
   bool _isConnected = false;
   bool _isKeyboardSubscribed = false;
   bool _isMediaKeysSubscribed = false;
-  uint8_t _keyboardLedState = 0xFF;
   uint32_t _delay_ms = 20;
   uint16_t _vid = 0x05ac;
   uint16_t _pid = 0x820a;
   uint16_t _version = 0x0210;
+  BleKeyboardLedStateBuffer _ledStateBuffer;
 
 public:
   BleKeyboard(std::string deviceName = "ESP32 BLE Keyboard",
@@ -156,7 +172,7 @@ public:
   void setBatteryLevel(uint8_t level);
   void setName(std::string deviceName) { _deviceName = deviceName; };
   void setDelay(uint32_t ms) { _delay_ms = ms; };
-  uint8_t getLedState(void) { return _keyboardLedState; };
+  bool getLedState(uint8_t &ledState);
   void setVendorId(uint16_t vid) { _vid = vid; };
   void setProductId(uint16_t pid) { _pid = pid; };
   void setVersion(uint16_t version) { _version = version; };

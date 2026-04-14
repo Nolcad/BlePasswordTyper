@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <BleKeyboard.h>
+#include <KeyboardLedSignaling.h>
 #include <M5GFX.h>
 #include <M5StickC.h>
 #include <NimBLEDevice.h>
@@ -7,11 +8,13 @@
 
 #include "AXP192.h"
 
-const char* PasswordSequence = ".\\USER\tPASSWORD\n";
+String DefaultPasswordSequence = String("Not Configured");
+String passwordSequence;
 
 Preferences preferences;
 
 BleKeyboard bleKeyboard("PasswordTyper", "Nolcad", 100);
+KeyboardLedSignaling myKls;
 
 M5GFX display;
 M5Canvas canvas;
@@ -45,6 +48,9 @@ enum class LedLightMode : uint8_t { off, on, slowBlink, fastBlink };
 LedLightMode ledLightMode = LedLightMode::off;
 bool ledState = false;
 unsigned long LastLedUpdate = 0;
+
+uint8_t keyboardLedState = 0xFF;
+uint8_t klsCountSave = 0xFF;
 
 void ledUpdate(LedLightMode lightMode) {
   unsigned long now = millis();
@@ -98,6 +104,15 @@ void setup() {
   preferences.begin("BleKeyboard", true);
   batteryCapacity = preferences.getUChar("BatteryCapacity", 80);
   batteryGaugeState = static_cast<BatteryGaugeState>(preferences.getUChar("GaugeState", 0));
+  if (!preferences.isKey("PassSeq")) {
+    log_e("Pass not found");
+    preferences.end();
+    preferences.begin("BleKeyboard", false);
+    preferences.putString("PassSeq", DefaultPasswordSequence);
+    preferences.end();
+    preferences.begin("BleKeyboard", true);
+  }
+  passwordSequence = preferences.getString("PassSeq", String(DefaultPasswordSequence));
   preferences.end();
   log_i("Restored battery capacity from NVS: %u", batteryCapacity);
   log_i("Restored gauge state from NVS: %u", batteryGaugeState);
@@ -110,219 +125,256 @@ void loop() {
   M5.update();
   ledUpdate(ledLightMode);
 
-  if (now - lastPowerUpdate >= POWER_UPDATE_PERIOD) {
-    lastPowerUpdate = now;
+  bleKeyboard.getLedState(keyboardLedState);
 
-    bool isEmpty = M5.Axp.GetWarningLevel();
-    bool isCharging = M5.Axp.GetBatteryChargingStatus() & 0x40;
-    bool isPowered = M5.Axp.GetInputPowerStatus() & 0x20;
+  myKls.Update(keyboardLedState & LED_NUM_LOCK, keyboardLedState & LED_SCROLL_LOCK);
 
-    ledLightMode = LedLightMode::off;
-
-    if (!isPowered && !isCharging) {
-      batteryState = BatteryState::discharging;
-    }
-
-    if (!isPowered && isCharging) {
-      batteryState = BatteryState::charging;
-      ledLightMode = LedLightMode::slowBlink;
-    }
-
-    if (isPowered && isCharging) {
-      batteryState = BatteryState::charging;
-      ledLightMode = LedLightMode::slowBlink;
-    }
-
-    BatteryState oldBatteryState = batteryState;
-    if (isPowered && !isCharging) {
-      batteryState = BatteryState::standby;
-      if (oldBatteryState == BatteryState::standby &&
-          batteryFullChargeTime < FULL_CHARGE_TIME_BEFORE_GAUGE_RESET) {
-        batteryFullChargeTime += POWER_UPDATE_PERIOD;
-      }
-      if (batteryFullChargeTime >= FULL_CHARGE_TIME_BEFORE_GAUGE_RESET) {
-        // Here we reached the high boundary.
-        // Update capacity if we went through low boundary first
-        if (batteryGaugeState == BatteryGaugeState::lowBoundary) {
-          batteryGaugeState = BatteryGaugeState::idle;
-          batteryCapacity = M5.Axp.GetCoulombData();
-          log_i("Saving battery capacity in NVS: %u", batteryCapacity);
-          log_i("Saving battery gauge state in NVS: %u", batteryGaugeState);
-          preferences.begin("BleKeyboard", false);
-          preferences.putUChar("BatteryCapacity", batteryCapacity);
-          preferences.putUChar("GaugeState", static_cast<uint8_t>(batteryGaugeState));
-          preferences.end();
-        }
-        batterySoc = 100;
-        batteryState = BatteryState::full;
-      }
-    } else {
-      batteryFullChargeTime = 0;
-    }
-
-    if (isEmpty) {
-      ledLightMode = LedLightMode::fastBlink;
-      // Here we reached the low boundary
-      batteryGaugeState = BatteryGaugeState::lowBoundary;
-      log_i("Battery is nearly empty, storing gauge state in NVS: %u", batteryGaugeState);
+  if(myKls.isComplete()){
+      // Store Password Sequence
       preferences.begin("BleKeyboard", false);
-      preferences.putUChar("GaugeState", static_cast<uint8_t>(batteryGaugeState));
+      preferences.putString("PassSeq", myKls.getPayloadString());
       preferences.end();
-      M5.Axp.ClearCoulombcounter();
-      batteryState = BatteryState::empty;
-    }
-
-    if (M5.Axp.GetCoulombData() >= batteryCapacity || batteryState == BatteryState::full) {
-      batterySoc = 100;
-    } else if (M5.Axp.GetCoulombData() <= 0) {
-      batterySoc = 0;
-    } else {
-      batterySoc = M5.Axp.GetCoulombData() * 100 / batteryCapacity;
-    }
-
-    bleKeyboard.setBatteryLevel(batterySoc);
-
-    log_i("Bat Status: 0x%02X, PowerStatus: 0x%02X, WarningLevel: %d, "
-          "BatVoltage: %0.3f",
-          M5.Axp.GetBatteryChargingStatus(), M5.Axp.GetInputPowerStatus(), M5.Axp.GetWarningLevel(),
-          M5.Axp.GetBatVoltage());
+      // Update password sequence string
+      passwordSequence = myKls.getPayloadString();
+      myKls.reset();
   }
 
-  if (now - lastScreenUpdate >= SCREEN_UPDATE_PERIOD) {
-    lastScreenUpdate = now;
-    canvas.clear();
-    canvas.setCursor(0, 0);
+  if (myKls.isCommunicating()) {
+    lastPowerOffTimeoutReset = now;
+    if (klsCountSave != myKls.getPayloadCurrentCount()) {
+      canvas.clear();
+      canvas.setCursor(0, 0);
 
-    canvas.setTextColor(TFT_WHITE);
-    canvas.printf("BLE:           ");
-    if (bleKeyboard.isConnected()) {
-      canvas.setTextColor(TFT_GREEN);
-    } else {
-      canvas.setTextColor(TFT_DARKGRAY);
-    }
-    canvas.printf("OK\r\n");
-
-    canvas.setTextColor(TFT_WHITE);
-    canvas.printf(" - Keyboard:   ");
-    if (bleKeyboard.isKeyboardSubscribed()) {
-      canvas.setTextColor(TFT_GREEN);
-    } else {
-      canvas.setTextColor(TFT_DARKGRAY);
-    }
-    canvas.printf("OK\r\n");
-
-    canvas.setTextColor(TFT_WHITE);
-    canvas.printf(" - Media keys: ");
-    if (bleKeyboard.isMediaKeysSubscribed()) {
-      canvas.setTextColor(TFT_GREEN);
-    } else {
-      canvas.setTextColor(TFT_DARKGRAY);
-    }
-    canvas.printf("OK\r\n");
-
-    canvas.setTextColor(TFT_WHITE);
-    canvas.printf(" - LED:        ");
-    if (bleKeyboard.getLedState() != 0xFF) {
-      canvas.setTextColor(bleKeyboard.getLedState() & LED_NUM_LOCK ? TFT_GREEN : TFT_DARKGREY);
-      canvas.printf("N ");
-      canvas.setTextColor(bleKeyboard.getLedState() & LED_CAPS_LOCK ? TFT_GREEN : TFT_DARKGREY);
-      canvas.printf("C ");
-      canvas.setTextColor(bleKeyboard.getLedState() & LED_SCROLL_LOCK ? TFT_GREEN : TFT_DARKGREY);
-      canvas.printf("S ");
-    } else {
-      canvas.setTextColor(TFT_DARKGRAY);
-      canvas.printf("- - - ");
-    }
-
-    canvas.printf("\r\n\r\n");
-
-    canvas.setTextColor(TFT_WHITE);
-    canvas.printf("Battery:       ");
-    canvas.printf("%3.2f mA.h", M5.Axp.GetCoulombData());
-
-    canvas.printf("\r\n");
-    canvas.printf(" - State:      ");
-    switch (batteryState) {
-    case BatteryState::empty:
-      canvas.setTextColor(TFT_RED);
-      canvas.printf("Empty");
       canvas.setTextColor(TFT_WHITE);
-      break;
+      canvas.printf("\n\nConfiguration in Progress");
 
-    case BatteryState::discharging:
-      canvas.setTextColor(TFT_ORANGE);
-      canvas.printf("Discharging");
-      canvas.setTextColor(TFT_WHITE);
-      break;
-
-    case BatteryState::charging:
-      canvas.setTextColor(TFT_GREEN);
-      canvas.printf("Charging");
-      canvas.setTextColor(TFT_WHITE);
-      break;
-
-    case BatteryState::full:
-      canvas.setTextColor(TFT_GREEN);
-      canvas.printf("Full");
-      canvas.setTextColor(TFT_WHITE);
-      break;
-
-    case BatteryState::standby:
-      canvas.printf("Standby");
-      break;
+      unsigned long communicationElapsed = 0;
+      if (myKls.getPayloadSize() > 0) {
+        communicationElapsed = myKls.getPayloadCurrentCount() * 154 / myKls.getPayloadSize();
+      }
+      canvas.drawRect(2, 39, 156, 6, TFT_DARKGRAY);
+      canvas.drawRect(4, 41, communicationElapsed, 2, TFT_DARKGRAY);
+      canvas.pushSprite(&display, 0, 0);
     }
-    canvas.printf("\r\n");
-    canvas.printf(" - SoC:        ");
-    canvas.printf("%u %%", batterySoc);
+    klsCountSave = myKls.getPayloadCurrentCount();
 
-    /*
-        canvas.printf(
-            "Bat Status: 0x%02X, PowerStatus: 0x%02X, WarningLevel: %d, "
-            "BatVoltage: %0.3f\r\n",
+  } else {
+    klsCountSave = 0xFF;
+    if (now - lastPowerUpdate >= POWER_UPDATE_PERIOD) {
+      lastPowerUpdate = now;
+
+      bool isEmpty = M5.Axp.GetWarningLevel();
+      bool isCharging = M5.Axp.GetBatteryChargingStatus() & 0x40;
+      bool isPowered = M5.Axp.GetInputPowerStatus() & 0x20;
+
+      ledLightMode = LedLightMode::off;
+
+      if (!isPowered && !isCharging) {
+        batteryState = BatteryState::discharging;
+      }
+
+      if (!isPowered && isCharging) {
+        batteryState = BatteryState::charging;
+        ledLightMode = LedLightMode::slowBlink;
+      }
+
+      if (isPowered && isCharging) {
+        batteryState = BatteryState::charging;
+        ledLightMode = LedLightMode::slowBlink;
+      }
+
+      BatteryState oldBatteryState = batteryState;
+      if (isPowered && !isCharging) {
+        batteryState = BatteryState::standby;
+        if (oldBatteryState == BatteryState::standby &&
+            batteryFullChargeTime < FULL_CHARGE_TIME_BEFORE_GAUGE_RESET) {
+          batteryFullChargeTime += POWER_UPDATE_PERIOD;
+        }
+        if (batteryFullChargeTime >= FULL_CHARGE_TIME_BEFORE_GAUGE_RESET) {
+          // Here we reached the high boundary.
+          // Update capacity if we went through low boundary first
+          if (batteryGaugeState == BatteryGaugeState::lowBoundary) {
+            batteryGaugeState = BatteryGaugeState::idle;
+            batteryCapacity = M5.Axp.GetCoulombData();
+            log_i("Saving battery capacity in NVS: %u", batteryCapacity);
+            log_i("Saving battery gauge state in NVS: %u", batteryGaugeState);
+            preferences.begin("BleKeyboard", false);
+            preferences.putUChar("BatteryCapacity", batteryCapacity);
+            preferences.putUChar("GaugeState", static_cast<uint8_t>(batteryGaugeState));
+            preferences.end();
+          }
+          batterySoc = 100;
+          batteryState = BatteryState::full;
+        }
+      } else {
+        batteryFullChargeTime = 0;
+      }
+
+      if (isEmpty) {
+        ledLightMode = LedLightMode::fastBlink;
+        // Here we reached the low boundary
+        batteryGaugeState = BatteryGaugeState::lowBoundary;
+        log_i("Battery is nearly empty, storing gauge state in NVS: %u", batteryGaugeState);
+        preferences.begin("BleKeyboard", false);
+        preferences.putUChar("GaugeState", static_cast<uint8_t>(batteryGaugeState));
+        preferences.end();
+        M5.Axp.ClearCoulombcounter();
+        batteryState = BatteryState::empty;
+      }
+
+      if (M5.Axp.GetCoulombData() >= batteryCapacity || batteryState == BatteryState::full) {
+        batterySoc = 100;
+      } else if (M5.Axp.GetCoulombData() <= 0) {
+        batterySoc = 0;
+      } else {
+        batterySoc = M5.Axp.GetCoulombData() * 100 / batteryCapacity;
+      }
+
+      bleKeyboard.setBatteryLevel(batterySoc);
+
+      log_i("Bat Status: 0x%02X, PowerStatus: 0x%02X, WarningLevel: %d, "
+            "BatVoltage: %0.3f",
             M5.Axp.GetBatteryChargingStatus(), M5.Axp.GetInputPowerStatus(),
             M5.Axp.GetWarningLevel(), M5.Axp.GetBatVoltage());
-    */
-
-    unsigned long timeoutElapsed = (now - lastPowerOffTimeoutReset) * 154 / POWER_OFF_TIMEOUT;
-    canvas.drawRect(2, 73, 156, 6, TFT_DARKGRAY);
-    canvas.drawRect(4, 75, 154 - timeoutElapsed, 2, TFT_DARKGRAY);
-    canvas.pushSprite(&display, 0, 0);
-  }
-
-  if (now - lastPowerOffTimeoutReset >= POWER_OFF_TIMEOUT) {
-    M5.Axp.PowerOff();
-  }
-  // 0x01 long press(1s), 0x02 press
-  if (M5.Axp.GetBtnPress() == 0x02) {
-    M5.Axp.PowerOff();
-  }
-
-  if (M5.BtnA.wasReleased()) {
-    lastPowerOffTimeoutReset = now;
-    log_i("Button pressed");
-    if (bleKeyboard.isConnected()) {
-      log_i("Sending data");
-
-      bleKeyboard.printf(PasswordSequence);
-
-      log_i("Data sent");
     }
-  }
 
-  if (M5.BtnB.wasReleased()) {
-    lastPowerOffTimeoutReset = now;
-    bleKeyboard.pressKey(KEY_MEDIA_MUTE);
-    bleKeyboard.releaseKey(KEY_MEDIA_MUTE);
-  }
+    if (now - lastScreenUpdate >= SCREEN_UPDATE_PERIOD) {
+      lastScreenUpdate = now;
+      canvas.clear();
+      canvas.setCursor(0, 0);
 
-  switch (batteryState) {
-  case BatteryState::empty:
-  case BatteryState::discharging:
-    break;
-  case BatteryState::charging:
-  case BatteryState::full:
-  case BatteryState::standby:
-    lastPowerOffTimeoutReset = now;
-    break;
+      canvas.setTextColor(TFT_WHITE);
+      canvas.printf("BLE:           ");
+      if (bleKeyboard.isConnected()) {
+        canvas.setTextColor(TFT_GREEN);
+      } else {
+        canvas.setTextColor(TFT_DARKGRAY);
+      }
+      canvas.printf("OK\r\n");
+
+      canvas.setTextColor(TFT_WHITE);
+      canvas.printf(" - Keyboard:   ");
+      if (bleKeyboard.isKeyboardSubscribed()) {
+        canvas.setTextColor(TFT_GREEN);
+      } else {
+        canvas.setTextColor(TFT_DARKGRAY);
+      }
+      canvas.printf("OK\r\n");
+
+      canvas.setTextColor(TFT_WHITE);
+      canvas.printf(" - Media keys: ");
+      if (bleKeyboard.isMediaKeysSubscribed()) {
+        canvas.setTextColor(TFT_GREEN);
+      } else {
+        canvas.setTextColor(TFT_DARKGRAY);
+      }
+      canvas.printf("OK\r\n");
+
+      canvas.setTextColor(TFT_WHITE);
+      canvas.printf(" - LED:        ");
+      if (keyboardLedState != 0xFF) {
+        canvas.setTextColor(keyboardLedState & LED_NUM_LOCK ? TFT_GREEN : TFT_DARKGREY);
+        canvas.printf("N ");
+        canvas.setTextColor(keyboardLedState & LED_CAPS_LOCK ? TFT_GREEN : TFT_DARKGREY);
+        canvas.printf("C ");
+        canvas.setTextColor(keyboardLedState & LED_SCROLL_LOCK ? TFT_GREEN : TFT_DARKGREY);
+        canvas.printf("S ");
+      } else {
+        canvas.setTextColor(TFT_DARKGRAY);
+        canvas.printf("- - - ");
+      }
+
+      canvas.printf("\r\n\r\n");
+
+      canvas.setTextColor(TFT_WHITE);
+      canvas.printf("Battery:       ");
+      canvas.printf("%3.2f mA.h", M5.Axp.GetCoulombData());
+
+      canvas.printf("\r\n");
+      canvas.printf(" - State:      ");
+      switch (batteryState) {
+      case BatteryState::empty:
+        canvas.setTextColor(TFT_RED);
+        canvas.printf("Empty");
+        canvas.setTextColor(TFT_WHITE);
+        break;
+
+      case BatteryState::discharging:
+        canvas.setTextColor(TFT_ORANGE);
+        canvas.printf("Discharging");
+        canvas.setTextColor(TFT_WHITE);
+        break;
+
+      case BatteryState::charging:
+        canvas.setTextColor(TFT_GREEN);
+        canvas.printf("Charging");
+        canvas.setTextColor(TFT_WHITE);
+        break;
+
+      case BatteryState::full:
+        canvas.setTextColor(TFT_GREEN);
+        canvas.printf("Full");
+        canvas.setTextColor(TFT_WHITE);
+        break;
+
+      case BatteryState::standby:
+        canvas.printf("Standby");
+        break;
+      }
+      canvas.printf("\r\n");
+      canvas.printf(" - SoC:        ");
+      canvas.printf("%u %%", batterySoc);
+
+      /*
+          canvas.printf(
+              "Bat Status: 0x%02X, PowerStatus: 0x%02X, WarningLevel: %d, "
+              "BatVoltage: %0.3f\r\n",
+              M5.Axp.GetBatteryChargingStatus(), M5.Axp.GetInputPowerStatus(),
+              M5.Axp.GetWarningLevel(), M5.Axp.GetBatVoltage());
+      */
+
+      unsigned long timeoutElapsed = (now - lastPowerOffTimeoutReset) * 154 / POWER_OFF_TIMEOUT;
+      canvas.drawRect(2, 73, 156, 6, TFT_DARKGRAY);
+      canvas.drawRect(4, 75, 154 - timeoutElapsed, 2, TFT_DARKGRAY);
+
+      canvas.pushSprite(&display, 0, 0);
+    }
+
+    if (now - lastPowerOffTimeoutReset >= POWER_OFF_TIMEOUT) {
+      M5.Axp.PowerOff();
+    }
+    // 0x01 long press(1s), 0x02 press
+    if (M5.Axp.GetBtnPress() == 0x02) {
+      M5.Axp.PowerOff();
+    }
+
+    if (M5.BtnA.wasReleased()) {
+      lastPowerOffTimeoutReset = now;
+      log_i("Button pressed");
+      if (bleKeyboard.isConnected()) {
+        log_i("Sending data");
+
+        bleKeyboard.printf(passwordSequence.c_str());
+
+        log_i("Data sent");
+      }
+    }
+
+    if (M5.BtnB.wasReleased()) {
+      lastPowerOffTimeoutReset = now;
+      bleKeyboard.pressKey(KEY_MEDIA_MUTE);
+      bleKeyboard.releaseKey(KEY_MEDIA_MUTE);
+    }
+
+    switch (batteryState) {
+    case BatteryState::empty:
+    case BatteryState::discharging:
+      break;
+    case BatteryState::charging:
+    case BatteryState::full:
+    case BatteryState::standby:
+      lastPowerOffTimeoutReset = now;
+      break;
+    }
   }
 }

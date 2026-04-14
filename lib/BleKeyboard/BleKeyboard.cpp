@@ -202,14 +202,23 @@ void BleKeyboard::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, 
   _isConnected = false;
   _isKeyboardSubscribed = false;
   _isMediaKeysSubscribed = false;
-  _keyboardLedState = 0xFF;
   log_i("Keyboard is disconnected");
 }
 
 void BleKeyboard::onWrite(NimBLECharacteristic *me, NimBLEConnInfo &connInfo) {
   uint8_t value = *(me->getValue().data());
-  _keyboardLedState = value;
-  log_i("Received keyboard LED state: 0x%02X", value);
+  log_d("Received keyboard LED state: 0x%02X", value);
+
+  if (!_ledStateBuffer.push(value)) {
+    log_w("LED buffer full, dropping value 0x%02X", value);
+  }
+}
+
+bool BleKeyboard::getLedState(uint8_t &ledState) {
+  if (_ledStateBuffer.pop(ledState)) {
+    return true;
+  }
+  return false;
 }
 
 void BleKeyboard::onSubscribe(NimBLECharacteristic *me, NimBLEConnInfo &connInfo,
@@ -236,4 +245,29 @@ void BleKeyboard::onSubscribe(NimBLECharacteristic *me, NimBLEConnInfo &connInfo
       break;
     }
   }
+}
+
+bool BleKeyboardLedStateBuffer::empty() const { return head == tail; }
+
+bool BleKeyboardLedStateBuffer::push(uint8_t value) {
+  size_t next = (head + 1) % SIZE;
+  if (next == tail) {
+    // buffer full
+    return false;
+  }
+  buffer[head] = value;
+  head = next;
+  count++;
+  return true;
+}
+
+bool BleKeyboardLedStateBuffer::pop(uint8_t &value) {
+  if (head == tail) {
+    // buffer empty
+    return false;
+  }
+  value = buffer[tail];
+  tail = (tail + 1) % SIZE;
+  count--;
+  return true;
 }
