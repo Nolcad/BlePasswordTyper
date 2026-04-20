@@ -1,53 +1,107 @@
-# BLE Password Typer
+# BlePasswordTyper
 
-This project emulates a BLE (Bluetooth Low Energy) keyboard to type a username and password automatically.
+## Overview
 
-Use it as an example if you need to port this to another device.
+**BlePasswordTyper** is an ESP32‑based experimental project that emulates a **Bluetooth Low Energy (BLE) keyboard** to automatically type predefined credentials on a paired host (PC, smartphone, tablet, etc.).
 
-Except for the screen, power management, HMI and device specific things, the ESP32 code should be generic enough.
+Beyond simple key injection, the project demonstrates **bidirectional communication over standard HID keyboard LEDs**, enabling the host to send information back to the device without custom drivers or BLE services.
 
-Most magic happens in the [BleKeyboard class](lib/BleKeyboard).
+⚠️ **Security Warning**  
+This project is intentionally insecure and intended for experimentation only. Credentials are stored in firmware and can be trivially recovered.
 
-Also, this unit served as an experiment platform to the AXP192 PMU (battery charging and gauge management).
+---
 
-> [!WARNING]
-> It is definitively not recommended to use this device.
-> The username and password can be recovered with a mere text editor by anyone.
-> Pretty weak...
+## Architecture Overview
 
-## Usage
+The project is structured into three clearly separated components:
 
-1. Power up
-2. Search and pair with your host (PC, smartphone...)
-3. Push the big button to type the sequence
+### 1. Application Layer (`src/`)
 
-### Hardware
+- Device boot and initialization
+- Button handling and user interaction
+- Orchestration of credential typing
+- Coordination between BLE keyboard and LED signaling
 
-Runs on an [M5StickC](https://shop.m5stack.com/products/stick-c).
+### 2. BleKeyboard Library (`lib/BleKeyboard/`)
 
-No other hardware is required
+- BLE HID keyboard implementation for ESP32
+- Sends key press and release events
+- Exposes host keyboard LED states (Caps Lock, Num Lock, Scroll Lock)
 
-## Installation/Programming
+See `lib/BleKeyboard/README.md` for details.
+
+### 3. KeyboardLedSignaling Library (`lib/KeyboardLedSignaling/`)
+
+- Decodes a **clocked, bit‑level protocol** transmitted via keyboard LED states
+- Provides a deterministic state machine and payload API
+
+See `lib/KeyboardLedSignaling/README.md` for details.
+
+---
+
+## Keyboard LED Signaling
+
+The project implements **host‑to‑device communication** using standard HID keyboard LEDs:
+
+- One LED acts as a **clock**
+- One LED acts as a **data line**
+- Bits are transmitted LSB‑first
+- Frame format:
+  - Byte 0: payload length
+  - Bytes 1..N: payload data
+
+This technique works over standard BLE HID and requires **no custom host drivers**.
+
+---
+
+## Hardware
+
+- **M5StickC** (ESP32‑based)
+- No external components required
+- Communication relies entirely on BLE HID reports
+
+---
+
+## Build & Flash
 
 ### Prerequisites
-- [Visual Studio Code](https://code.visualstudio.com/)
-- [PlatformIO](https://platformio.org/)
 
-### Procedure
+- Visual Studio Code
+- PlatformIO
 
-1. Download and open the project in VSCode/PlatformIO
+### Steps
 
-1. Initialize the project (terminal within VSCode)
-   ```shell
-   pio project init --ide=vscode
-   ```
+```sh
+pio project init --ide=vscode
+pio run --target upload
+```
 
-1. Build and upload the project
+---
 
 ## Configuration
 
-See [main.cpp](./src/main.cpp) file...
+Refer to `src/main.cpp` for:
 
-## Shout-outs
- - [Danjovic](https://github.com/Danjovic/DigistumpArduino/tree/master/digistump-avr/libraries/DigisparkKeyboard) - USB Keyboard with LED
- - [Axlan](https://github.com/axlan/haunted_doll/tree/main) - USB Keyboard with LED #2
+- Credential definition
+- Button mapping
+- BLE keyboard initialization
+- Integration with `KeyboardLedSignaling`
+
+---
+
+## Intended Use
+
+This project is intended as:
+
+- A BLE HID learning platform
+- A proof‑of‑concept for LED‑based side‑channel communication
+- A reusable reference for embedded HID experimentation
+
+It is **not** intended for real‑world secure credential handling.
+
+---
+
+## Shout‑outs
+
+- DigisparkKeyboard – USB keyboard LED handling
+- Haunted Doll – LED signaling inspiration
