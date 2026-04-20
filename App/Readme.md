@@ -1,8 +1,8 @@
-# Apps
+# App
 
 ## Overview
 
-The **apps** folder contains **host‑side helper scripts** that interact with the
+The **App** folder contains **host‑side helper scripts** that interact with the
 **BlePasswordTyper** device. These applications demonstrate how a host computer can
 **actuate the `KeyboardLedSignaling` protocol** using only standard HID keyboard LED control.
 
@@ -33,10 +33,11 @@ No additional files are required beyond the script itself.
 
 At a high level, the script performs the following steps:
 
-1. Assigns one LED as a **clock** and one as **data**
-2. Drives LED transitions using simulated key events
-3. Sends bits **LSB‑first**, sampled on clock transitions
-4. Frames messages as:
+1. Reads current keyboard LED states
+2. Assigns one LED as a **clock** and one as **data**
+3. Drives LED transitions using simulated key events
+4. Sends bits **LSB‑first**, sampled on clock transitions
+5. Frames messages as:
    - First byte: payload length
    - Following bytes: payload data
 
