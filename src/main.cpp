@@ -354,7 +354,7 @@ void loop() {
       if (bleKeyboard.isConnected()) {
         log_i("Sending data");
 
-        bleKeyboard.printf(passwordSequence.c_str());
+        bleKeyboard.printf("%s",passwordSequence.c_str());
 
         log_i("Data sent");
       }
